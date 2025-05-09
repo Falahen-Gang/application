@@ -3,13 +3,18 @@ import 'package:http/http.dart' as http;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 class AuthService {
-  static const String baseUrl = 'http://192.168.1.34:8000/api/auth';
+  // Update the base URL to ensure it's correct - adjust if needed
+  static const String baseUrl = 'http://192.168.1.34:8000/api';
+  static const String authUrl = '$baseUrl/auth';
   static const storage = FlutterSecureStorage();
   static const String tokenKey = 'auth_token';
   static const String userDataKey = 'user_data';
 
   // Save token and user data to secure storage
-  static Future<void> _saveAuthData(String token, Map<String, dynamic> userData) async {
+  static Future<void> _saveAuthData(
+    String token,
+    Map<String, dynamic> userData,
+  ) async {
     await storage.write(key: tokenKey, value: token);
     await storage.write(key: userDataKey, value: jsonEncode(userData));
   }
@@ -45,15 +50,23 @@ class AuthService {
     final token = await getToken();
     return {
       'Content-Type': 'application/json',
+      'Accept': 'application/json', // Add Accept header to ensure JSON response
       if (token != null) 'Authorization': 'Bearer $token',
     };
   }
 
-  static Future<Map<String, dynamic>> signup(String name, String email, String password) async {
+  static Future<Map<String, dynamic>> signup(
+    String name,
+    String email,
+    String password,
+  ) async {
     try {
       final response = await http.post(
-        Uri.parse('$baseUrl/register'),
-        headers: {'Content-Type': 'application/json'},
+        Uri.parse('$authUrl/register'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
         body: jsonEncode({
           'name': name,
           'email': email,
@@ -62,88 +75,179 @@ class AuthService {
         }),
       );
 
-      if (response.statusCode == 200) {
+      // Check if response is valid JSON
+      if (response.body.trim().startsWith('<')) {
+        // Non-JSON response, likely HTML error page
+        return {
+          'success': false,
+          'message':
+              'Server returned an invalid response. Please try again later.',
+        };
+      }
+
+      // Try to parse JSON response
+      try {
         final data = jsonDecode(response.body);
-        
-        // Extract token and user data
-        final token = data['token'] ?? data['access_token'];
-        final userData = data['user'] ?? data;
-        
-        // Save auth data
-        if (token != null) {
-          await _saveAuthData(token, userData);
+
+        if (response.statusCode == 200) {
+          // Extract token and user data
+          final token = data['token'] ?? data['access_token'];
+          final userData = data['user'] ?? data;
+
+          // Save auth data
+          if (token != null) {
+            await _saveAuthData(token, userData);
+          }
+
+          return {'success': true, 'data': data};
+        } else {
+          return {
+            'success': false,
+            'message': data['message'] ?? 'Signup failed',
+          };
         }
-        
-        return {'success': true, 'data': data};
-      } else {
-        final error = jsonDecode(response.body);
-        return {'success': false, 'message': error['message'] ?? 'Signup failed'};
+      } catch (e) {
+        return {
+          'success': false,
+          'message': 'Failed to parse server response: $e',
+        };
       }
     } catch (e) {
       return {'success': false, 'message': 'An error occurred: $e'};
     }
   }
 
-  static Future<Map<String, dynamic>> login(String email, String password) async {
-    try {
-      final response = await http.post(
-        Uri.parse('$baseUrl/login'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'email': email,
-          'password': password,
-        }),
-      );
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        
-        // Extract token and user data
-        final token = data['token'] ?? data['access_token'];
-        final userData = data['user'] ?? data;
-        
-        // Save auth data
-        if (token != null) {
-          await _saveAuthData(token, userData);
-        }
-        
-        return {'success': true, 'data': data};
-      } else {
-        final error = jsonDecode(response.body);
-        return {'success': false, 'message': error['message'] ?? 'Login failed'};
-      }
-    } catch (e) {
-      return {'success': false, 'message': 'An error occurred: $e'};
-    }
-  }
-  
-  // Method to make authenticated requests
-  static Future<Map<String, dynamic>> authenticatedRequest(
-    String endpoint, 
-    {String method = 'GET', Map<String, dynamic>? body}
+  static Future<Map<String, dynamic>> login(
+    String email,
+    String password,
   ) async {
     try {
+      final response = await http.post(
+        Uri.parse('$authUrl/login'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: jsonEncode({'email': email, 'password': password}),
+      );
+
+      // Check if response is valid JSON
+      if (response.body.trim().startsWith('<')) {
+        // Non-JSON response, likely HTML error page
+        return {
+          'success': false,
+          'message':
+              'Server returned an invalid response. Please try again later.',
+        };
+      }
+
+      // Try to parse JSON response
+      try {
+        final data = jsonDecode(response.body);
+
+        if (response.statusCode == 200) {
+          // Extract token and user data
+          final token = data['token'] ?? data['access_token'];
+          final userData = data['user'] ?? data;
+
+          // Save auth data
+          if (token != null) {
+            await _saveAuthData(token, userData);
+          }
+
+          return {'success': true, 'data': data};
+        } else {
+          return {
+            'success': false,
+            'message': data['message'] ?? 'Login failed',
+          };
+        }
+      } catch (e) {
+        return {
+          'success': false,
+          'message': 'Failed to parse server response: $e',
+        };
+      }
+    } catch (e) {
+      return {'success': false, 'message': 'An error occurred: $e'};
+    }
+  }
+
+  // Add refresh token functionality
+  static Future<bool> refreshToken() async {
+    try {
+      final token = await getToken();
+      if (token == null) return false;
+
+      final response = await http.post(
+        Uri.parse('$authUrl/refresh'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+
+      print('Refresh token response: ${response.statusCode}');
+      print('Refresh token body: ${response.body}');
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final newToken = data['token'] ?? data['access_token'];
+        if (newToken != null) {
+          await storage.write(key: tokenKey, value: newToken);
+          return true;
+        }
+      }
+      return false;
+    } catch (e) {
+      print('Error refreshing token: $e');
+      return false;
+    }
+  }
+
+  // Update authenticatedRequest to handle token refresh
+  static Future<Map<String, dynamic>> authenticatedRequest(
+    String endpoint, {
+    String method = 'GET',
+    Map<String, dynamic>? body,
+  }) async {
+    try {
       final headers = await getAuthHeaders();
-      final uri = Uri.parse('$baseUrl/$endpoint');
-      
+      final token = await getToken();
+
+      print('Making request to endpoint: $endpoint');
+      print('Method: $method');
+      print('Headers: $headers');
+      print('Body: $body');
+      print('Token exists: ${token != null}');
+
+      // Determine if endpoint is a full URL or just a path
+      final uri =
+          endpoint.startsWith('http')
+              ? Uri.parse(endpoint)
+              : Uri.parse('$baseUrl/$endpoint');
+
+      print('Full URL: $uri');
+
       http.Response response;
-      
+
       switch (method) {
         case 'GET':
           response = await http.get(uri, headers: headers);
           break;
         case 'POST':
           response = await http.post(
-            uri, 
+            uri,
             headers: headers,
-            body: body != null ? jsonEncode(body) : null
+            body: body != null ? jsonEncode(body) : null,
           );
           break;
         case 'PUT':
           response = await http.put(
-            uri, 
+            uri,
             headers: headers,
-            body: body != null ? jsonEncode(body) : null
+            body: body != null ? jsonEncode(body) : null,
           );
           break;
         case 'DELETE':
@@ -152,22 +256,58 @@ class AuthService {
         default:
           return {'success': false, 'message': 'Invalid request method'};
       }
-      
-      if (response.statusCode >= 200 && response.statusCode < 300) {
+
+      print('Response status code: ${response.statusCode}');
+      print('Response body: ${response.body}');
+
+      // Check if response is valid JSON
+      if (response.body.trim().startsWith('<')) {
+        return {
+          'success': false,
+          'message':
+              'Server returned an invalid response. Status code: ${response.statusCode}',
+          'statusCode': response.statusCode,
+        };
+      }
+
+      // Try to parse JSON response
+      try {
         final data = jsonDecode(response.body);
-        return {'success': true, 'data': data};
-      } else {
-        // Handle token expiration
-        if (response.statusCode == 401) {
-          // Token has expired or is invalid
-          await logout(); // Clear stored credentials
-          return {'success': false, 'message': 'Session expired. Please login again.', 'tokenExpired': true};
+
+        if (response.statusCode >= 200 && response.statusCode < 300) {
+          return {'success': true, 'data': data};
+        } else {
+          // Handle token expiration
+          if (response.statusCode == 401) {
+            // Try to refresh the token
+            final refreshSuccess = await refreshToken();
+            if (refreshSuccess) {
+              // Retry the request with the new token
+              return authenticatedRequest(endpoint, method: method, body: body);
+            } else {
+              // Token refresh failed, logout
+              await logout();
+              return {
+                'success': false,
+                'message': 'Session expired. Please login again.',
+                'tokenExpired': true,
+              };
+            }
+          }
+
+          return {
+            'success': false,
+            'message': data['message'] ?? 'Request failed',
+            'data': data,
+            'statusCode': response.statusCode,
+          };
         }
-        
-        final error = jsonDecode(response.body);
-        return {'success': false, 'message': error['message'] ?? 'Request failed'};
+      } catch (e) {
+        print('JSON parsing error: $e');
+        return {'success': false, 'message': 'Failed to parse response: $e'};
       }
     } catch (e) {
+      print('Network error: $e');
       return {'success': false, 'message': 'An error occurred: $e'};
     }
   }
