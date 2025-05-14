@@ -59,6 +59,7 @@ class AuthService {
     String name,
     String email,
     String password,
+    String phone,
   ) async {
     try {
       final response = await http.post(
@@ -72,6 +73,7 @@ class AuthService {
           'email': email,
           'password': password,
           'password_confirmation': password,
+          'phone': phone,
         }),
       );
 
